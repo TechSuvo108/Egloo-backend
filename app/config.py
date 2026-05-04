@@ -20,13 +20,13 @@ class Settings(BaseSettings):
     ENCRYPTION_KEY: str = "change-this-encryption-key-in-production"
 
     # LLM API Keys
-    GEMINI_API_KEY: Optional[str] = None
-    GROQ_API_KEY: Optional[str] = None
-    OPENROUTER_API_KEY: Optional[str] = None
+    GEMINI_API_KEYS: Optional[str] = None
+    GROQ_API_KEYS: Optional[str] = None
+    OPENROUTER_API_KEYS: Optional[str] = None
     OPENROUTER_BASE_URL: str = "https://openrouter.ai/api/v1"
-    OPENROUTER_MODEL: str = "mistralai/mistral-7b-instruct"
-    GROQ_MODEL: str = "llama3-8b-8192"
-    GEMINI_MODEL: str = "gemini-1.5-flash"
+    OPENROUTER_MODEL: str = "openai/gpt-4o-mini"
+    GROQ_MODEL: str = "llama-3.3-70b-versatile"
+    GEMINI_MODEL: str = "gemini-1.5-flash-latest"
 
     # How many chunks to retrieve from ChromaDB per query
     RAG_TOP_K: int = 8

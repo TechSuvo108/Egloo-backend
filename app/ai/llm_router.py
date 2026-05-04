@@ -8,6 +8,7 @@ from app.config import settings
 async def _call_gemini(
     prompt: str,
     system: str,
+    api_key: str,
     stream: bool = False,
 ) -> AsyncGenerator[str, None]:
     """
@@ -16,10 +17,10 @@ async def _call_gemini(
     """
     import google.generativeai as genai
 
-    if not settings.GEMINI_API_KEY:
+    if not api_key:
         raise ValueError("GEMINI_API_KEY not set")
 
-    genai.configure(api_key=settings.GEMINI_API_KEY)
+    genai.configure(api_key=api_key)
     model = genai.GenerativeModel(
         model_name=settings.GEMINI_MODEL,
         system_instruction=system,
@@ -43,6 +44,7 @@ async def _call_gemini(
 async def _call_groq(
     prompt: str,
     system: str,
+    api_key: str,
     stream: bool = False,
 ) -> AsyncGenerator[str, None]:
     """
@@ -51,10 +53,10 @@ async def _call_groq(
     """
     from groq import AsyncGroq
 
-    if not settings.GROQ_API_KEY:
+    if not api_key:
         raise ValueError("GROQ_API_KEY not set")
 
-    client = AsyncGroq(api_key=settings.GROQ_API_KEY)
+    client = AsyncGroq(api_key=api_key)
 
     messages = [
         {"role": "system", "content": system},
@@ -85,6 +87,7 @@ async def _call_groq(
 async def _call_openrouter(
     prompt: str,
     system: str,
+    api_key: str,
     stream: bool = False,
 ) -> AsyncGenerator[str, None]:
     """
@@ -94,11 +97,11 @@ async def _call_openrouter(
     """
     from openai import AsyncOpenAI
 
-    if not settings.OPENROUTER_API_KEY:
+    if not api_key:
         raise ValueError("OPENROUTER_API_KEY not set")
 
     client = AsyncOpenAI(
-        api_key=settings.OPENROUTER_API_KEY,
+        api_key=api_key,
         base_url=settings.OPENROUTER_BASE_URL,
     )
 
@@ -147,54 +150,54 @@ async def call_llm(
     If all fail, raises RuntimeError.
     """
     providers = [
-        ("gemini", _call_gemini),
-        ("groq", _call_groq),
-        ("openrouter", _call_openrouter),
+        ("gemini", _call_gemini, settings.GEMINI_API_KEYS),
+        ("groq", _call_groq, settings.GROQ_API_KEYS),
+        ("openrouter", _call_openrouter, settings.OPENROUTER_API_KEYS),
     ]
 
     last_error = None
 
-    for model_name, provider_fn in providers:
-        try:
-            # Test if provider is configured before trying
-            if model_name == "gemini" and not settings.GEMINI_API_KEY:
-                continue
-            if model_name == "groq" and not settings.GROQ_API_KEY:
-                continue
-            if model_name == "openrouter" and not settings.OPENROUTER_API_KEY:
-                continue
-
-            gen = provider_fn(prompt, system, stream)
-            # Peek at first chunk to verify connection works
-            # We wrap in a peekable generator
-            first_chunk = None
-            buffer = []
-
-            async for chunk in gen:
-                first_chunk = chunk
-                buffer.append(chunk)
-                break
-
-            if first_chunk is None:
-                continue
-
-            # Rebuild full generator: yield buffered + rest
-            async def _full_gen(buf, original_gen):
-                for c in buf:
-                    yield c
-                async for c in original_gen:
-                    yield c
-
-            return _full_gen(buffer, gen), model_name
-
-        except Exception as e:
-            last_error = e
-            print(f"[WARNING] LLM provider {model_name} failed: {e}")
+    for model_name, provider_fn, api_keys_str in providers:
+        if not api_keys_str:
             continue
 
+        # Split by comma and strip whitespace to get the list of keys
+        api_keys = [k.strip() for k in api_keys_str.split(",") if k.strip()]
+
+        for api_key in api_keys:
+            try:
+                gen = provider_fn(prompt, system, api_key, stream)
+                # Peek at first chunk to verify connection works
+                # We wrap in a peekable generator
+                first_chunk = None
+                buffer = []
+
+                async for chunk in gen:
+                    first_chunk = chunk
+                    buffer.append(chunk)
+                    break
+
+                if first_chunk is None:
+                    continue
+
+                # Rebuild full generator: yield buffered + rest
+                async def _full_gen(buf, original_gen):
+                    for c in buf:
+                        yield c
+                    async for c in original_gen:
+                        yield c
+
+                return _full_gen(buffer, gen), model_name
+
+            except Exception as e:
+                last_error = e
+                safe_key = f"...{api_key[-4:]}" if len(api_key) > 4 else "***"
+                print(f"[WARNING] LLM provider {model_name} with key {safe_key} failed: {e}")
+                continue
+
     raise RuntimeError(
-        f"All LLM providers failed. Last error: {last_error}. "
-        f"Add at least one API key to .env: "
+        f"All LLM providers and keys failed. Last error: {last_error}. "
+        f"Add valid API keys to .env: "
         f"GEMINI_API_KEY, GROQ_API_KEY, or OPENROUTER_API_KEY"
     )
 
@@ -217,10 +220,12 @@ async def call_llm_simple(
 
 # ─── Query hash helper (for Redis cache) ─────────────────────────────────────
 
-def hash_query(user_id: str, question: str) -> str:
+import re
+
+def hash_query(question: str) -> str:
     """
-    Create a cache key from user_id + question.
-    Same user asking same question returns cached answer.
+    Create a cache key from the question.
+    Same question returns same hash.
     """
-    raw = f"{user_id}:{question.strip().lower()}"
-    return hashlib.sha256(raw.encode()).hexdigest()
+    normalized = re.sub(r'\s+', ' ', question.strip().lower())
+    return hashlib.sha256(normalized.encode()).hexdigest()
