@@ -33,4 +33,7 @@ lxml
 python-docx
 PyMuPDF
 tiktoken
-numpy
+google-generativeai
+groq
+openai
+sse-starlette

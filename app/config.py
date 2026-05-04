@@ -23,6 +23,16 @@ class Settings(BaseSettings):
     GEMINI_API_KEY: Optional[str] = None
     GROQ_API_KEY: Optional[str] = None
     OPENROUTER_API_KEY: Optional[str] = None
+    OPENROUTER_BASE_URL: str = "https://openrouter.ai/api/v1"
+    OPENROUTER_MODEL: str = "mistralai/mistral-7b-instruct"
+    GROQ_MODEL: str = "llama3-8b-8192"
+    GEMINI_MODEL: str = "gemini-1.5-flash"
+
+    # How many chunks to retrieve from ChromaDB per query
+    RAG_TOP_K: int = 8
+
+    # Redis TTL for cached query answers (1 hour)
+    QUERY_CACHE_TTL: int = 3600
 
     # Google OAuth
     GOOGLE_CLIENT_ID: Optional[str] = None

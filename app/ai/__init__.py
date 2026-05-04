@@ -1,1 +1,1 @@
-# AI package
+# AI pipeline package

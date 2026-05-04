@@ -2,7 +2,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.routers import auth, sources, ingest
+from app.routers import auth, sources, ingest, query
 from app.services.auth_service import check_redis_connection
 
 
@@ -18,7 +18,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Egloo API",
     version="1.0.0",
-    description="PenGo — Your second brain assistant 🐧",
+    description="PenGo — Your second brain assistant",
     lifespan=lifespan,
 )
 
@@ -33,6 +33,7 @@ app.add_middleware(
 app.include_router(auth.router, prefix="/api/v1")
 app.include_router(sources.router, prefix="/api/v1")
 app.include_router(ingest.router, prefix="/api/v1")
+app.include_router(query.router, prefix="/api/v1")
 
 
 @app.get("/")
