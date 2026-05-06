@@ -15,4 +15,4 @@ build/
 .mypy_cache/
 celerybeat-schedule
 scratch/
-
+firebaseusing.json
