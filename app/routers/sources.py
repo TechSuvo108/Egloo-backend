@@ -255,7 +255,11 @@ async def gmail_callback(
         },
     )
 
-    return RedirectResponse(url="egloo://auth/callback?status=success&source=gmail", status_code=302)
+    return {
+        "success": True,
+        "message": "Gmail connected successfully",
+        "source": "gmail"
+    }
 
 
 @router.get(
