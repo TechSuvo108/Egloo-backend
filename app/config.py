@@ -73,6 +73,9 @@ class Settings(BaseSettings):
     # App timezone for digest scheduling
     APP_TIMEZONE: str = "UTC"
 
+    # Feature Flag: Use Celery for ingestion (Default False for cloud free-tier)
+    USE_ASYNC_INGEST: bool = False
+
     model_config = {"env_file": ".env", "extra": "ignore"}
 
 

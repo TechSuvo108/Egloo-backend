@@ -21,3 +21,9 @@ class PDFUploadAcceptedResponse(BaseModel):
     message: str
     document_id: UUID
     job_id: str
+
+
+class PDFUploadSuccessResponse(BaseModel):
+    message: str
+    document_id: UUID
+    chunks_created: int

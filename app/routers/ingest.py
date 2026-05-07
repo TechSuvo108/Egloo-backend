@@ -1,3 +1,4 @@
+from typing import Union
 import uuid
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -7,11 +8,13 @@ from app.dependencies import get_current_user
 from app.models.user import User
 from app.schemas.ingest import IngestResponse, IngestResultResponse
 from app.schemas.job import JobStatusResponse, JobListResponse
-from app.schemas.document import PDFUploadAcceptedResponse
+from app.schemas.document import PDFUploadAcceptedResponse, PDFUploadSuccessResponse
 from app.models.uploaded_document import UploadedDocument
 from app.services.source_service import get_source_by_id, get_all_sources
 from app.services.ingestion_service import ingest_source
+from app.services.pdf_service import process_pdf_ingestion
 from app.utils.job_tracker import create_job, get_job, get_user_jobs
+from app.config import settings
 
 router = APIRouter(prefix="/ingest", tags=["ingest"])
 
@@ -57,7 +60,7 @@ async def trigger_ingest(
     )
 
 
-@router.post("/pdf", response_model=PDFUploadAcceptedResponse)
+@router.post("/pdf", response_model=Union[PDFUploadAcceptedResponse, PDFUploadSuccessResponse])
 async def upload_pdf(
     file: UploadFile = File(...),
     current_user: User = Depends(get_current_user),
@@ -65,7 +68,8 @@ async def upload_pdf(
 ):
     """
     Upload a PDF file for semantic indexing.
-    Validates size, type, and queues a background task for text extraction.
+    Validates size, type, and either processes it synchronously (free tier)
+    or queues a background task (celery enabled).
     """
     import os
     from app.workers.tasks import process_pdf_task
@@ -107,27 +111,57 @@ async def upload_pdf(
     db.add(doc)
     await db.commit()
 
-    # 4. Queue Celery task
-    job_id = str(uuid.uuid4())
-    await create_job(
-        job_id=job_id,
-        user_id=str(current_user.id),
-        source_id=file_id,
-        source_type="pdf_upload",
-    )
+    # 4. Processing logic based on Feature Flag
+    if settings.USE_ASYNC_INGEST:
+        # ASYNC FLOW (Celery)
+        job_id = str(uuid.uuid4())
+        await create_job(
+            job_id=job_id,
+            user_id=str(current_user.id),
+            source_id=file_id,
+            source_type="pdf_upload",
+        )
 
-    process_pdf_task.delay(
-        user_id=str(current_user.id),
-        doc_id=file_id,
-        file_path=full_path,
-        job_id=job_id
-    )
+        process_pdf_task.delay(
+            user_id=str(current_user.id),
+            doc_id=file_id,
+            file_path=full_path,
+            job_id=job_id
+        )
 
-    return PDFUploadAcceptedResponse(
-        message="PDF upload accepted and queued for processing.",
-        document_id=uuid.UUID(file_id),
-        job_id=job_id
-    )
+        return PDFUploadAcceptedResponse(
+            message="PDF upload accepted and queued for processing.",
+            document_id=uuid.UUID(file_id),
+            job_id=job_id
+        )
+    else:
+        # SYNC FLOW (Free Tier)
+        try:
+            chunks_count = await process_pdf_ingestion(
+                db=db,
+                user_id=str(current_user.id),
+                doc_id=file_id,
+                file_path=full_path
+            )
+            
+            # Optional: trigger topic refresh in background if celery is alive but we just didn't want it for the main task
+            # Or just skip it for pure sync flow.
+            
+            return PDFUploadSuccessResponse(
+                message="PDF processed successfully",
+                document_id=uuid.UUID(file_id),
+                chunks_created=chunks_count
+            )
+        except ValueError as ve:
+            raise HTTPException(
+                status_code=400,
+                detail=str(ve)
+            )
+        except Exception as e:
+            raise HTTPException(
+                status_code=500,
+                detail=f"PDF processing failed: {str(e)}"
+            )
 
 
 @router.post("/trigger-all", response_model=list[IngestResponse])

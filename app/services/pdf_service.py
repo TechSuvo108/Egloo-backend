@@ -38,7 +38,7 @@ async def extract_text_from_pdf(file_path: str) -> List[Dict[str, Any]]:
     # Check if we got any text at all
     total_text = "".join([p["content"] for p in pages]).strip()
     if not total_text:
-        raise ValueError("PDF contains no readable text. It might be a scanned document without OCR.")
+        raise ValueError("PDF contains no readable text. It may be scanned without OCR.")
         
     return pages
 
@@ -48,13 +48,14 @@ async def process_pdf_ingestion(
     user_id: str,
     doc_id: str,
     file_path: str
-):
+) -> int:
     """
     Full ingestion pipeline for a PDF:
     1. Extract text
     2. Chunk
     3. Embed
     4. Store in ChromaDB & Postgres
+    Returns the number of chunks created.
     """
     user_uuid = uuid.UUID(user_id)
     doc_uuid = uuid.UUID(doc_id)
@@ -64,7 +65,7 @@ async def process_pdf_ingestion(
     doc_record = result.scalar_one_or_none()
     if not doc_record:
         print(f"[ERROR] Document {doc_id} not found in database.")
-        return
+        return 0
 
     try:
         doc_record.sync_status = "processing"
@@ -143,6 +144,7 @@ async def process_pdf_ingestion(
         doc_record.sync_status = "success"
         await db.commit()
         print(f"[PDF] Successfully ingested {doc_record.filename} ({len(all_chunks)} chunks)")
+        return len(all_chunks)
 
     except Exception as e:
         print(f"[PDF ERROR] Ingestion failed for {doc_record.filename}: {e}")
