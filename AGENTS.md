@@ -4,7 +4,7 @@ Welcome to the comprehensive guide for the **Egloo** backend. This document expl
 
 ---
 
-## 🏗️ System Overview
+## 🏗️ System Overview 
 
 Egloo is a Retrieval-Augmented Generation (RAG) platform that connects to your personal data sources (Gmail, Slack, Google Drive, and manual PDF uploads) and provides an intelligent interface to query, summarize, and organize your digital life.
 
