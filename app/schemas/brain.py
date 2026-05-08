@@ -12,6 +12,7 @@ class BrainTodayResponse(BaseModel):
 class BrainMissingResponse(BaseModel):
     """Analysis of gaps, missed items, and pending work."""
     missing: List[str] = Field(default_factory=list)
+    model_used: Optional[str] = None
 
 class BrainConnection(BaseModel):
     """A semantically clustered connection across sources."""

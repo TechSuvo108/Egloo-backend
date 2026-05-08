@@ -64,6 +64,20 @@ async def ingest_source(
     await _update_sync_status(db, source, "syncing")
     print(f"🐧 Pingo starting ingestion for {source_type}...")
 
+    # ── Special Case: PDF Uploads ─────────────────────────────────────────────
+    # Requirement: gracefully skip if already synchronously processed
+    if source_type == "pdf_upload":
+        print(f"[WORKER] {source_type} already processed")
+        await _update_sync_status(
+            db, source, "success",
+            last_synced_at=datetime.now(timezone.utc),
+        )
+        return {
+            "source_type": source_type,
+            "message": "PDF sources are processed during upload and skip background sync.",
+            "skipped": True
+        }
+
     try:
         # ── Step 1: Decrypt tokens ──────────────────────────────────────────
         access_token = get_decrypted_access_token(source)
@@ -196,6 +210,27 @@ async def ingest_source(
         }
 
     except Exception as e:
+        # ── Handle Auth Failures (Stop Retry Storm) ───────────────────────────
+        from cryptography.fernet import InvalidToken
+        error_msg = str(e).lower()
+        
+        # Check for decryption failure or API auth failure
+        is_auth_failure = (
+            isinstance(e, InvalidToken) or
+            any(kw in error_msg for kw in ["401", "unauthorized", "invalid_grant", "expired_token", "invalid token"])
+        )
+
+        if is_auth_failure:
+            print(f"⚠️ [AUTH] Permanent authentication failure for {source_type}: {e}")
+            await _update_sync_status(db, source, "auth_expired")
+            # We return instead of raising to STOP Celery from retrying
+            return {
+                "source_type": source_type,
+                "error": str(e),
+                "status": "auth_expired",
+                "message": f"Authentication for {source_type} failed. Please reconnect.",
+            }
+
         print(f"❌ Ingestion failed for {source_type}: {e}")
         await _update_sync_status(db, source, "error")
         raise

@@ -7,37 +7,48 @@ from app.config import settings
 # In a Celery context (with asyncio.run), we need it to be loop-aware or recreated.
 
 _redis_client = None
+_loop = None
 
 def get_redis_client():
     """
-    Returns the global Redis client.
-    Note: In Celery tasks using asyncio.run(), the client should be 
-    used carefully to avoid loop mismatch.
+    Returns a loop-aware Redis client.
+    Recreates the client if the event loop has changed (e.g. in tests).
     """
-    global _redis_client
-    if _redis_client is None:
+    global _redis_client, _loop
+    
+    try:
+        current_loop = asyncio.get_running_loop()
+    except RuntimeError:
+        current_loop = None
+
+    if _redis_client is None or _loop != current_loop:
+        # Recreate client for the new loop
         _redis_client = aioredis.from_url(
-            settings.REDIS_URL, 
+            settings.REDIS_URL,
             decode_responses=True,
             encoding="utf-8",
-            # We don't initialize the pool until first use
         )
+        _loop = current_loop
+        
     return _redis_client
 
-async def close_redis_client():
+async def close_redis():
     """
-    Closes the Redis client connections.
-    Crucial for Celery tasks to avoid 'Event loop is closed' errors.
+    Closes the Redis client connections cleanly.
     """
-    global _redis_client
+    global _redis_client, _loop
     if _redis_client is not None:
-        await _redis_client.close()
+        try:
+            await _redis_client.aclose()
+        except Exception:
+            pass
         _redis_client = None
+        _loop = None
 
 async def check_redis_health():
     """Simple ping to verify connectivity."""
-    client = get_redis_client()
     try:
+        client = get_redis_client()
         return await client.ping()
     except Exception:
         return False

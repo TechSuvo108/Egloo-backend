@@ -186,8 +186,19 @@ async def call_llm(
 
         except provider["base_error"] as e:
             # Provider error (timeout, config, API error)
-            print(f"[ERROR] {name} error: {e}")
-            await mark_unhealthy(name, f"error: {str(e)[:80]}")
+            error_msg = str(e).lower()
+            
+            # Detect auth errors (invalid keys)
+            is_auth_error = any(kw in error_msg for kw in ["invalid api key", "401", "authentication", "unauthorized"])
+            
+            if is_auth_error:
+                # Mark as unhealthy for longer (e.g. 1 hour) because keys don't fix themselves
+                print(f"[WARNING] {name} has invalid configuration or API key. Skipping.")
+                await mark_unhealthy(name, f"auth_error: {str(e)[:60]}")
+            else:
+                print(f"[ERROR] {name} error: {e}")
+                await mark_unhealthy(name, f"error: {str(e)[:80]}")
+                
             await log_usage(name, success=False)
             errors.append(f"{name}: {str(e)[:60]}")
             continue
@@ -198,13 +209,14 @@ async def call_llm(
             errors.append(f"{name}: unexpected error")
             continue
 
-    # All providers failed
+    # All providers failed — Graceful Fallback
     error_summary = " | ".join(errors) if errors else "No providers configured"
-    raise RuntimeError(
-        f"All LLM providers failed. Details: {error_summary}. "
-        f"Add at least one API key to .env: "
-        f"GEMINI_API_KEYS, GROQ_API_KEYS, or OPENROUTER_API_KEYS"
-    )
+    print(f"[FATAL] All LLM providers failed. Details: {error_summary}")
+    
+    async def _fallback_generator() -> AsyncGenerator[str, None]:
+        yield "LLM temporarily unavailable"
+    
+    return _fallback_generator(), "none"
 
 
 # ─── Simple non-streaming call ────────────────────────────────────────────────
@@ -217,12 +229,6 @@ async def call_llm_simple(
     Non-streaming LLM call.
     Collects full response as a single string.
     Returns: (full_response_text, model_name)
-
-    Use this for:
-    - Digest generation
-    - Topic clustering
-    - Action item extraction
-    - Any task where you need the full response at once
     """
     gen, model_name = await call_llm(
         prompt=prompt,
@@ -242,3 +248,24 @@ def hash_query(user_id: str, question: str) -> str:
     """
     raw = f"{user_id}:{question.strip().lower()}"
     return hashlib.sha256(raw.encode()).hexdigest()
+
+async def get_active_provider_async() -> str:
+    """
+    Returns the name of the first configured AND healthy provider.
+    Used for health checks.
+    """
+    for provider in PROVIDERS:
+        if _is_configured(provider):
+            if await is_healthy(provider["name"]):
+                return provider["name"]
+    return "none"
+
+def get_active_provider() -> str:
+    """
+    Legacy sync version. 
+    Note: should move to async in brain_service health check.
+    """
+    for provider in PROVIDERS:
+        if _is_configured(provider):
+            return provider["name"]
+    return "none"

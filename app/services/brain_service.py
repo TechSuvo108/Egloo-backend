@@ -162,88 +162,6 @@ Return a JSON object with the following structure:
     return intelligence
 
 
-# ─── Function 2: Missing Items (Gap Analysis) ─────────────────────────────────
-
-async def get_missing_items(
-    db: AsyncSession, 
-    user_id: UUID,
-    days: int = 14
-) -> Dict[str, Any]:
-    """
-    Analyzes recent data to find unresolved tasks, unanswered messages, 
-    missed deadlines, or pending approvals.
-    """
-    # 0. Check Cache
-    cache_key = f"brain_missing:{user_id}"
-    cached = await get_redis().get(cache_key)
-    if cached:
-        return json.loads(cached)
-
-    since = datetime.now(timezone.utc) - timedelta(days=days)
-    
-    result = await db.execute(
-        select(DocumentChunk)
-        .where(DocumentChunk.user_id == user_id)
-        .where(DocumentChunk.created_at >= since)
-        .order_by(desc(DocumentChunk.created_at))
-        .limit(100)
-    )
-    db_chunks = result.scalars().all()
-    
-    if not db_chunks:
-        return {"missing": []}
-
-    formatted_chunks = []
-    for c in db_chunks:
-        meta = c.chunk_metadata or {}
-        formatted_chunks.append({
-            "content": c.content,
-            "source_type": meta.get("source_type", "unknown"),
-            "sender": meta.get("sender", ""),
-            "subject": meta.get("subject", ""),
-            "timestamp": meta.get("timestamp", ""),
-            "metadata": meta,
-            "filename": meta.get("filename", ""),
-            "page_number": meta.get("page_number", "")
-        })
-    
-    context = build_context(formatted_chunks)
-
-    prompt = f"""Analyze the following recent data to find:
-- Unresolved tasks
-- Unanswered urgent messages
-- Missed deadlines mentioned
-- Pending approvals the user needs to give
-- Work that is currently blocked
-
-DATA CONTEXT:
-{context}
-
----
-
-Return a JSON object with the following structure:
-{{
-  "missing": [
-    "Short description of missing item 1",
-    "Short description of missing item 2"
-  ]
-}}"""
-
-    answer, model = await call_llm_simple(
-        prompt=prompt,
-        system=BRAIN_SYSTEM_PROMPT
-    )
-
-    result = _extract_json(answer)
-    if "missing" not in result:
-        result = {"missing": []}
-    
-    # Cache for 1 hour
-    await get_redis().setex(cache_key, 3600, json.dumps(result))
-    
-    return result
-
-
 async def get_brain_connections(
     db: AsyncSession, 
     user_id: UUID,
@@ -343,3 +261,80 @@ Return a JSON object:
     # Cache for 1 hour
     await get_redis().setex(cache_key, 3600, json.dumps(final_result))
     return final_result
+
+
+# ─── Function 4: Brain Health Check ──────────────────────────────────────────
+
+async def check_brain_health(db: AsyncSession) -> Dict[str, Any]:
+    """
+    Checks connectivity for all critical brain dependencies.
+    """
+    import sqlalchemy
+    from app.utils.chroma_client import get_chroma_client
+    from datetime import datetime, timezone
+    from app.ai.llm_router import get_active_provider_async
+    
+    print("[BRAIN HEALTH] Performing health check...")
+    
+    health = {
+        "postgres": False,
+        "redis": False,
+        "chroma": False,
+        "llm": "none",
+        "scheduler": False,
+    }
+    
+    # 1. Postgres
+    try:
+        await db.execute(sqlalchemy.text("SELECT 1"))
+        health["postgres"] = True
+    except Exception as e:
+        print(f"[BRAIN HEALTH] Postgres error: {e}")
+
+    # 2. Redis
+    try:
+        r = get_redis()
+        await r.ping()
+        health["redis"] = True
+    except Exception as e:
+        print(f"[BRAIN HEALTH] Redis error: {e}")
+
+    # 3. Chroma
+    try:
+        get_chroma_client().heartbeat()
+        health["chroma"] = True
+    except Exception as e:
+        print(f"[BRAIN HEALTH] Chroma error: {e}")
+
+    # 4. LLM
+    try:
+        health["llm"] = await get_active_provider_async()
+    except Exception as e:
+        print(f"[BRAIN HEALTH] LLM check error: {e}")
+
+    # 5. Scheduler (check heartbeat)
+    if health["redis"]:
+        try:
+            last_beat = await get_redis().get("scheduler_last_heartbeat")
+            if last_beat:
+                # If heartbeat was within the last 3 minutes, it's alive
+                last_time = datetime.fromisoformat(last_beat.decode() if isinstance(last_beat, bytes) else last_beat)
+                diff = datetime.now(timezone.utc) - last_time
+                if diff.total_seconds() < 180:
+                    health["scheduler"] = True
+        except Exception as e:
+            print(f"[BRAIN HEALTH] Scheduler check error: {e}")
+
+    # Calculate overall status
+    critical_ok = health["postgres"] and health["redis"]
+    if critical_ok:
+        if health["chroma"] and health["scheduler"] and health["llm"] != "none":
+            status = "healthy"
+        else:
+            status = "degraded"
+    else:
+        status = "down"
+        
+    health["status"] = status
+    print(f"[BRAIN HEALTH] Result: {status}")
+    return health

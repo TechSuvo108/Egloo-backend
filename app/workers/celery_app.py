@@ -20,9 +20,11 @@ celery_app.conf.update(
     accept_content=["json"],
     timezone="UTC",
     enable_utc=True,
+    # Performance & Reliability
     task_track_started=True,
     task_acks_late=True,
     worker_prefetch_multiplier=1,
+    task_default_queue="celery",
 
     # Retry failed tasks up to 3 times with 60s delay
     task_max_retries=3,
@@ -41,6 +43,18 @@ celery_app.conf.update(
         "generate-daily-digests": {
             "task": "app.workers.tasks.generate_digests_for_all_users",
             "schedule": crontab(hour=7, minute=0),
+        },
+
+        # Proactive brain refresh at 6 AM UTC (before digest)
+        "daily-brain-refresh": {
+            "task": "app.workers.tasks.daily_brain_refresh",
+            "schedule": crontab(hour=6, minute=0),
+        },
+
+        # Heartbeat every minute
+        "scheduler-heartbeat": {
+            "task": "app.workers.tasks.scheduler_heartbeat",
+            "schedule": crontab(minute="*"),
         },
     },
 )

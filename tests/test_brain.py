@@ -4,7 +4,8 @@ from unittest.mock import AsyncMock, patch, MagicMock
 from uuid import uuid4
 from datetime import datetime, timezone, timedelta
 
-from app.services.brain_service import get_brain_today, get_missing_items, _extract_json
+from app.services.brain_service import get_brain_today, _extract_json
+from app.services.missing_service import get_missing_items
 from app.services.alert_service import scan_and_store_alerts
 from app.models.document_chunk import DocumentChunk
 
@@ -151,7 +152,7 @@ async def test_get_missing_items_logic(mock_db, mock_redis):
         "missing": ["Approval for Mars mission (from Elon on Slack)"]
     }
     
-    with patch("app.services.brain_service.call_llm_simple", new_callable=AsyncMock) as mock_llm:
+    with patch("app.services.missing_service.call_llm_simple", new_callable=AsyncMock) as mock_llm:
         mock_llm.return_value = (json.dumps(mock_json), "gemini")
         
         result = await get_missing_items(mock_db, user_id)

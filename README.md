@@ -1,14 +1,15 @@
 # 🐧 Egloo Backend — Pingo Second Brain
 
-Egloo is an AI-powered **second brain** that connects your **Gmail, Slack, and Google Drive** into a single intelligent assistant named **Pingo**.
+Egloo is an AI-powered **second brain** that connects your **Gmail, Slack, Google Drive, and Documents** into a single intelligent assistant named **Pingo**.
 
 Pingo helps users:
 
 * Search across connected sources using natural language
-* Generate daily digests and summaries
+* **Proactively** identify unanswered requests and pending blockers
+* Discover semantic relationships between unrelated documents
+* Generate daily digests and summaries automatically
+* Get real-time alerts for deadlines and approvals
 * Cluster information into smart topics
-* Save important answers and notes
-* Build a personalized knowledge base over time
 
 ---
 
@@ -20,32 +21,21 @@ Pingo helps users:
 | **Database**          | PostgreSQL 15 + SQLAlchemy Async  |
 | **Vector Database**   | ChromaDB                          |
 | **Cache / Queue**     | Redis 7                           |
-| **Workers**           | Celery + Celery Beat              |
-| **AI Pipeline**       | LangChain + sentence-transformers |
-| **Primary LLM**       | Gemini 1.5 Flash                  |
-| **Secondary LLM**     | Groq (Llama 3)                    |
-| **Fallback LLM**      | OpenRouter                        |
-| **Containerization**  | Docker + Docker Compose           |
+| **Workers**           | Celery + **Celery Beat** (Periodic Tasks) |
+| **AI Pipeline**       | Gemini / Groq / OpenRouter        |
+| **Resilience**        | 3-Tier LLM Fallback + Health Monitoring |
 
 ---
 
 ## 📦 Features
 
-* JWT Authentication
-* Gmail OAuth Integration
-* Google Drive OAuth Integration
-* Slack OAuth Integration
-* Document Ingestion + Chunking
-* Embedding + Vector Search
-* Retrieval-Augmented Generation (RAG)
-* Multi-Provider LLM Routing
-* Daily Digest Generation
-* Topic Clustering
-* Saved / Bookmark System
-* Background Jobs with Celery
-* Dockerized Development Environment
-* Environment Validation System
-* End-to-End Test Suite
+* **Proactive Intelligence**: Automated gap analysis (Missing Info), relationship discovery (Connections), and urgent item detection (Alerts).
+* **Brain Health Monitoring**: Real-time tracking of Postgres, Redis, ChromaDB, LLM providers, and Scheduler vitality.
+* **Resilient LLM Routing**: Deterministic fallback with auth-aware provider skipping and total outage protection.
+* **Hardened Ingestion**: Intelligent pipeline that handles OAuth expiration, invalid keys, and multi-source synchronization.
+* **Multi-Source Integration**: Gmail, Slack, Google Drive, and manual PDF uploads.
+* **Deterministic Caching**: Redis-based query normalization and result caching.
+* **Smart Topics**: Automated semantic clustering of large datasets.
 
 ---
 
@@ -64,82 +54,17 @@ cd egloo/backend
 cp .env.example .env
 ```
 
-### 3) Generate secure keys
-
-```bash
-python -c "import secrets; print('SECRET_KEY=' + secrets.token_hex(32))"
-python -c "import secrets; print('ENCRYPTION_KEY=' + secrets.token_hex(32))"
-```
-
-Paste both into `.env`.
-
----
-
-### 4) Add at least one LLM API key
-
-Free providers:
-
-* Gemini → https://aistudio.google.com/app/apikey
-* Groq → https://console.groq.com/keys
-
-Example:
-
-```env
-GEMINI_API_KEYS=your_key_here
-GROQ_API_KEYS=your_key_here
-OPENROUTER_API_KEYS=
-```
-
----
-
-### 5) Start backend
+### 3) Start backend
 
 ```bash
 docker compose build
 docker compose up -d
 ```
 
-Run migrations:
+### 4) Run migrations
 
 ```bash
 docker compose exec api alembic upgrade head
-```
-
-Seed demo user:
-
-```bash
-docker compose exec api python -m app.seed
-```
-
----
-
-### 6) Verify
-
-Swagger Docs:
-
-```text
-http://localhost:8000/docs
-```
-
-Health Check:
-
-```text
-http://localhost:8000/health
-```
-
-Expected:
-
-```json
-{
-  "status": "healthy",
-  "services": {
-    "postgres": "connected",
-    "redis": "connected",
-    "chroma": "connected",
-    "llm": "configured"
-  },
-  "assistant": "Pingo 🐧"
-}
 ```
 
 ---
@@ -151,32 +76,12 @@ Expected:
 | Auth    | `/api/v1/auth`    | Register, login, refresh, logout |
 | Sources | `/api/v1/sources` | Connect Gmail / Slack / Drive    |
 | Ingest  | `/api/v1/ingest`  | Fetch, chunk, embed, store       |
-| Query   | `/api/v1/query`   | Ask Pingo questions              |
+| Brain   | `/api/v1/brain`   | **Proactive Intelligence & Health** |
+| Query   | `/api/v1/query`   | Ask Pingo questions (RAG)        |
 | Digest  | `/api/v1/digest`  | Daily summaries                  |
 | Topics  | `/api/v1/topics`  | Auto-clustered topic groups      |
 | Saved   | `/api/v1/saved`   | Bookmarks                        |
 | LLM     | `/api/v1/llm`     | Provider health + usage          |
-
----
-
-## 🔐 Environment Variables
-
-| Variable             | Required | Description                     |
-| -------------------- | -------- | ------------------------------- |
-| DATABASE_URL         | Yes      | PostgreSQL connection string    |
-| REDIS_URL            | Yes      | Redis connection                |
-| CHROMA_HOST          | Yes      | Chroma host                     |
-| CHROMA_PORT          | Yes      | Chroma port                     |
-| SECRET_KEY           | Yes      | JWT signing secret              |
-| ENCRYPTION_KEY       | Yes      | Encryption secret               |
-| GEMINI_API_KEYS      | One LLM  | Comma-separated Gemini keys     |
-| GROQ_API_KEYS        | One LLM  | Comma-separated Groq keys       |
-| OPENROUTER_API_KEYS  | One LLM  | Comma-separated OpenRouter keys |
-| GOOGLE_CLIENT_ID     | Optional | Gmail / Drive OAuth             |
-| GOOGLE_CLIENT_SECRET | Optional | Gmail / Drive OAuth             |
-| SLACK_CLIENT_ID      | Optional | Slack OAuth                     |
-| SLACK_CLIENT_SECRET  | Optional | Slack OAuth                     |
-| FCM_CREDENTIALS_PATH | Optional | Firebase push notifications     |
 
 ---
 
@@ -186,20 +91,13 @@ Expected:
 Android App (Kotlin)
       |
       v
-FastAPI Gateway
-(CORS + JWT + Routers)
+FastAPI Gateway (CORS + JWT)
       |
       v
 +----------------------------------+
-| auth | sources | ingest | query  |
-| digest | topics | saved | llm    |
-+----------------------------------+
-      |
-      v
-+----------------------------------+
-| AI Pipeline                      |
-| embed -> vector search -> LLM    |
-| Gemini -> Groq -> OpenRouter     |
+| Brain Service (Proactive Intel)  |
+| Ingestion Service (Hardened)     |
+| LLM Router (Fault Tolerant)      |
 +----------------------------------+
       |
       v
@@ -209,20 +107,7 @@ FastAPI Gateway
 +------------+-----------+---------+
       |
       v
-Celery Worker + Beat
-```
-
----
-
-## 🛠 Common Commands
-
-```bash
-docker compose up -d        # Start services
-docker compose down         # Stop services
-docker compose logs -f      # Watch logs
-docker compose ps           # Service status
-docker compose build        # Rebuild images
-docker compose restart api  # Restart API
+Celery Worker + Beat (Scheduled Maintenance)
 ```
 
 ---
@@ -232,3 +117,4 @@ docker compose restart api  # Restart API
 **Backend Complete — Production Ready**
 
 Assistant Name: **Pingo 🐧**
+*The most resilient and proactive second brain ever built.*

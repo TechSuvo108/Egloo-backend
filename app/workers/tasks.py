@@ -20,10 +20,10 @@ def run_async(coro):
             return await coro
         finally:
             from app.database import dispose_engine
-            from app.utils.redis_client import close_redis_client
+            from app.utils.redis_client import close_redis
             try:
                 await dispose_engine()
-                await close_redis_client()
+                await close_redis()
             except Exception as e:
                 print(f"[WARNING] Async cleanup failed: {e}")
 
@@ -79,13 +79,30 @@ def sync_source(self, source_id: str, user_id: str, job_id: str):
                     message=f"Fetching data from {source.source_type}...",
                 )
 
+                if source.source_type == "pdf_upload":
+                    print(f"[WORKER] Skipping background sync for {source.source_type}")
+                    await update_job(
+                        job_id,
+                        status="success",
+                        progress=100,
+                        message="PDF source skipped (handled during upload).",
+                    )
+                    return
+
                 result = await ingest_source(db, source, user_id)
+
+                status = "success"
+                message = f"Pingo finished ingesting {source.source_type}!"
+                
+                if result.get("status") == "auth_expired":
+                    status = "failed"
+                    message = f"Auth failed for {source.source_type}. Please reconnect."
 
                 await update_job(
                     job_id,
-                    status="success",
+                    status=status,
                     progress=100,
-                    message=f"Pingo finished ingesting {source.source_type}!",
+                    message=message,
                     result=result,
                 )
 
@@ -364,3 +381,96 @@ def process_pdf_task(self, user_id: str, doc_id: str, file_path: str, job_id: st
         return run_async(_run())
     except Exception as exc:
         raise self.retry(exc=exc)
+
+
+# ─── Task 8: Daily Brain Refresh (Beat schedule) ─────────────────────────────
+
+@celery_app.task(name="app.workers.tasks.daily_brain_refresh")
+def daily_brain_refresh():
+    """
+    Celery Beat task: runs every morning.
+    Pre-generates and caches brain intelligence for all active users.
+    """
+    async def _run():
+        from app.database import AsyncSessionLocal
+        from sqlalchemy import select, desc
+        from app.models.user import User
+        from app.models.document_chunk import DocumentChunk
+        from app.services import brain_service, missing_service, alert_service
+        from datetime import datetime, timedelta, timezone
+
+        async with AsyncSessionLocal() as db:
+            # Find all active users
+            result = await db.execute(
+                select(User).where(User.is_active == True)
+            )
+            users = result.scalars().all()
+            print(f"[BRAIN JOB] Starting refresh for {len(users)} users")
+
+            for user in users:
+                user_id = user.id
+                print(f"[BRAIN JOB] refreshing user {user.email}...")
+                
+                try:
+                    # 1. Today Summary (/brain/today)
+                    await brain_service.get_brain_today(db, user_id)
+                    print(f"[BRAIN JOB] cached today")
+
+                    # 2. Missing Items (/brain/missing)
+                    await missing_service.get_missing_items(db, user_id)
+                    print(f"[BRAIN JOB] cached missing")
+
+                    # 3. Connections (/brain/connections)
+                    await brain_service.get_brain_connections(db, user_id)
+                    print(f"[BRAIN JOB] cached connections")
+
+                    # 4. Alerts (/brain/alerts) - Re-scan last 7 days of chunks
+                    since = datetime.now(timezone.utc) - timedelta(days=7)
+                    chunk_res = await db.execute(
+                        select(DocumentChunk)
+                        .where(DocumentChunk.user_id == user_id)
+                        .where(DocumentChunk.created_at >= since)
+                        .order_by(desc(DocumentChunk.created_at))
+                        .limit(100)
+                    )
+                    db_chunks = chunk_res.scalars().all()
+                    if db_chunks:
+                        formatted = []
+                        for c in db_chunks:
+                            meta = c.chunk_metadata or {}
+                            formatted.append({
+                                "content": c.content,
+                                "metadata": meta
+                            })
+                        await alert_service.scan_and_store_alerts(str(user_id), formatted)
+                        print(f"[BRAIN JOB] cached alerts")
+                
+                except Exception as e:
+                    print(f"[BRAIN JOB] [ERROR] Failed to refresh brain for {user.email}: {e}")
+
+    try:
+        return run_async(_run())
+    except Exception as exc:
+        print(f"[BRAIN JOB] [ERROR] daily_brain_refresh global failure: {exc}")
+        raise
+
+# ─── Task 9: Scheduler Heartbeat ──────────────────────────────────────────────
+
+@celery_app.task(name="app.workers.tasks.scheduler_heartbeat")
+def scheduler_heartbeat():
+    """
+    Celery Beat task: runs every minute.
+    Updates a timestamp in Redis to prove the scheduler is alive.
+    """
+    async def _run():
+        from app.utils.redis_client import get_redis_client
+        from datetime import datetime, timezone
+        
+        r = get_redis_client()
+        await r.set("scheduler_last_heartbeat", datetime.now(timezone.utc).isoformat())
+        print("[BRAIN HEARTBEAT] Scheduler is alive")
+
+    try:
+        return run_async(_run())
+    except Exception as e:
+        print(f"[BRAIN HEARTBEAT] [ERROR] Heartbeat failed: {e}")

@@ -27,7 +27,7 @@ async def get_today_summary(
             detail=f"Pingo could not generate your brain summary: {str(e)}"
         )
 
-@router.post("/missing", response_model=BrainMissingResponse)
+@router.get("/missing", response_model=BrainMissingResponse)
 async def get_missing_items(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -37,7 +37,8 @@ async def get_missing_items(
     missed deadlines, or pending approvals.
     """
     try:
-        result = await brain_service.get_missing_items(db, current_user.id)
+        from app.services import missing_service
+        result = await missing_service.get_missing_items(db, current_user.id)
         return BrainMissingResponse(**result)
     except Exception as e:
         raise HTTPException(
@@ -78,3 +79,11 @@ async def get_brain_connections(
             status_code=500,
             detail=f"Pingo could not discover connections: {str(e)}"
         )
+
+@router.get("/health", tags=["🐧 Health"])
+async def brain_health(db: AsyncSession = Depends(get_db)):
+    """
+    Public health check for the Pingo Brain.
+    Checks connections to Postgres, Redis, ChromaDB, and LLM providers.
+    """
+    return await brain_service.check_brain_health(db)

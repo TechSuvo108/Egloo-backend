@@ -44,6 +44,8 @@ async def lifespan(app: FastAPI):
 
     # ── Shutdown ──────────────────────────────────────────────────────────────
     print("🐧 Egloo API shutting down — Pingo is sleeping...")
+    from app.utils.redis_client import close_redis
+    await close_redis()
 
 
 # ── Create app ────────────────────────────────────────────────────────────────
