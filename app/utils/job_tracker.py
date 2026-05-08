@@ -2,11 +2,10 @@ import json
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
-import redis.asyncio as aioredis
-
 from app.config import settings
+from app.utils.redis_client import get_redis_client
 
-redis_client = aioredis.from_url(settings.REDIS_URL, decode_responses=True)
+def get_redis(): return get_redis_client()
 
 # Jobs live in Redis for 24 hours
 JOB_TTL_SECONDS = 86400
@@ -36,7 +35,7 @@ async def create_job(
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
     key = f"job:{job_id}"
-    await redis_client.setex(key, JOB_TTL_SECONDS, json.dumps(job))
+    await get_redis().setex(key, JOB_TTL_SECONDS, json.dumps(job))
     return job
 
 
@@ -50,7 +49,7 @@ async def update_job(
 ) -> None:
     """Update job status in Redis. Call this from inside Celery tasks."""
     key = f"job:{job_id}"
-    raw = await redis_client.get(key)
+    raw = await get_redis().get(key)
     if not raw:
         return
 
@@ -67,13 +66,13 @@ async def update_job(
         job["error"] = error
     job["updated_at"] = datetime.now(timezone.utc).isoformat()
 
-    await redis_client.setex(key, JOB_TTL_SECONDS, json.dumps(job))
+    await get_redis().setex(key, JOB_TTL_SECONDS, json.dumps(job))
 
 
 async def get_job(job_id: str) -> Optional[Dict[str, Any]]:
     """Fetch job status from Redis."""
     key = f"job:{job_id}"
-    raw = await redis_client.get(key)
+    raw = await get_redis().get(key)
     if not raw:
         return None
     return json.loads(raw)
@@ -85,8 +84,8 @@ async def get_user_jobs(user_id: str, limit: int = 20) -> list:
     Scans Redis for keys matching job:* and filters by user_id.
     """
     jobs = []
-    async for key in redis_client.scan_iter("job:*"):
-        raw = await redis_client.get(key)
+    async for key in get_redis().scan_iter("job:*"):
+        raw = await get_redis().get(key)
         if raw:
             job: Dict[str, Any] = json.loads(raw)
             if job.get("user_id") == user_id:

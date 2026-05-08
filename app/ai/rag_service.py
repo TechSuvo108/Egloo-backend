@@ -3,14 +3,17 @@ import asyncio
 from typing import AsyncGenerator, List, Dict, Any, Optional
 from datetime import datetime, timezone
 
-import redis.asyncio as aioredis
-
 from app.config import settings
 from app.utils.embedder import embed_single
 from app.utils.chroma_client import get_or_create_collection
 from app.ai.llm_router import call_llm, call_llm_simple, hash_query
+from app.utils.redis_client import get_redis_client
 
-redis_client = aioredis.from_url(settings.REDIS_URL, decode_responses=True)
+# Local getter to ensure we are loop-safe
+def get_redis(): return get_redis_client()
+
+# ─── Constants ──────────────────────────────────────────────────────────────
+MIN_SIMILARITY = 0.03
 
 
 # ─── System prompt for Pingo ──────────────────────────────────────────────────
@@ -52,10 +55,13 @@ async def retrieve_chunks(
 
     # Embed the question
     question_vector = embed_single(question)
+    print(f"[DEBUG] Question embedded. Vector length: {len(question_vector)}")
 
     # Get user's ChromaDB collection
     try:
         collection = get_or_create_collection(user_id)
+        collection_count = collection.count()
+        print(f"[DEBUG] Collection for {user_id} loaded. Total items in collection: {collection_count}")
     except Exception as e:
         print(f"[WARNING] ChromaDB collection error: {e}")
         return []
@@ -69,9 +75,8 @@ async def retrieve_chunks(
                 where_filter = {"source_type": active_sources[0]}
             else:
                 where_filter = {"source_type": {"$in": active_sources}}
-        elif active_sources == []:
-            # If explicit empty list, return nothing
-            return []
+        
+        print(f"[DEBUG] Searching ChromaDB with filter: {where_filter}")
 
         # Run ChromaDB query in a thread pool since the HttpClient is synchronous
         results = await asyncio.to_thread(
@@ -81,6 +86,7 @@ async def retrieve_chunks(
             where=where_filter,
             include=["documents", "metadatas", "distances"],
         )
+        print(f"[DEBUG] Raw ChromaDB query results count: {len(results.get('documents', [[]])[0])}")
     except Exception as e:
         print(f"[WARNING] ChromaDB query error: {e}")
         return []
@@ -94,9 +100,10 @@ async def retrieve_chunks(
     for doc, meta, dist in zip(documents, metadatas, distances):
         # Convert cosine distance to similarity score (0-1)
         similarity = round(1 - dist, 4)
+        print(f"[DEBUG] Chunk similarity: {similarity} (Distance: {dist})")
 
         # Only include chunks with reasonable similarity
-        if similarity < 0.2:
+        if similarity < MIN_SIMILARITY:
             continue
 
         chunks.append({
@@ -129,17 +136,18 @@ def build_context(chunks: List[Dict[str, Any]]) -> str:
 
     lines = []
     for i, chunk in enumerate(chunks, 1):
-        source_type = chunk["source_type"].upper()
+        source_type = str(chunk.get("source_type", "unknown")).upper()
         sender = chunk.get("sender", "")
         subject = chunk.get("subject", "")
         timestamp = chunk.get("timestamp", "")
+        metadata = chunk.get("metadata", {}) or chunk.get("chunk_metadata", {})
 
         # Format header for this chunk
         header_parts = [f"[{i}] Source: {source_type}"]
         
         if source_type == "PDF_UPLOAD":
-            filename = chunk.get("metadata", {}).get("filename", "Unknown PDF")
-            page = chunk.get("metadata", {}).get("page_number", "?")
+            filename = metadata.get("filename", "Unknown PDF")
+            page = metadata.get("page_number", "?")
             header_parts.append(f"File: {filename}")
             header_parts.append(f"Page: {page}")
         else:
@@ -179,11 +187,11 @@ def format_sources(chunks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
         sources.append({
             "document_id": doc_id,
-            "source_type": chunk["source_type"],
+            "source_type": chunk.get("source_type", "unknown"),
             "sender": chunk.get("sender", ""),
-            "subject": chunk.get("subject", "") or chunk.get("metadata", {}).get("filename", ""),
+            "subject": chunk.get("subject", "") or (chunk.get("metadata") or {}).get("filename", ""),
             "timestamp": chunk.get("timestamp", ""),
-            "page_number": chunk.get("metadata", {}).get("page_number"),
+            "page_number": (chunk.get("metadata") or {}).get("page_number"),
             "content_preview": chunk["content"][:200] + "..."
                 if len(chunk["content"]) > 200
                 else chunk["content"],
@@ -198,7 +206,7 @@ def format_sources(chunks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 async def get_cached_answer(user_id: str, question: str) -> Optional[Dict]:
     """Check Redis for a cached answer to this question."""
     cache_key = f"query_cache:{user_id}:{hash_query(user_id, question)}"
-    raw = await redis_client.get(cache_key)
+    raw = await get_redis().get(cache_key)
     if raw:
         print("[CACHE HIT] Cache hit — returning cached answer")
         return json.loads(raw)
@@ -209,7 +217,7 @@ async def get_cached_answer(user_id: str, question: str) -> Optional[Dict]:
 async def cache_answer(user_id: str, question: str, answer_data: Dict):
     """Cache an answer in Redis for QUERY_CACHE_TTL seconds."""
     cache_key = f"query_cache:{user_id}:{hash_query(user_id, question)}"
-    await redis_client.setex(
+    await get_redis().setex(
         cache_key,
         settings.QUERY_CACHE_TTL,
         json.dumps(answer_data),

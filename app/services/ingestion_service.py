@@ -14,6 +14,7 @@ from app.services.source_service import (
     get_decrypted_access_token,
     get_decrypted_refresh_token,
 )
+from app.services.alert_service import scan_and_store_alerts
 
 
 # ---------------------------------------------------------------------------
@@ -179,6 +180,12 @@ async def ingest_source(
             db, source, "success",
             last_synced_at=datetime.now(timezone.utc),
         )
+
+        # ── Step 10: Scan for proactive alerts ───────────────────────────────
+        try:
+            await scan_and_store_alerts(user_id, all_chunks)
+        except Exception as e:
+            print(f"⚠️  Alert scanning failed: {e}")
 
         return {
             "source_type": source_type,

@@ -1,12 +1,10 @@
-import redis.asyncio as aioredis
+from app.utils.redis_client import get_redis_client
 from app.config import settings
 
 
 def get_redis():
-    return aioredis.from_url(
-        settings.REDIS_URL,
-        decode_responses=True,
-    )
+    """Fallback to centralized client."""
+    return get_redis_client()
 
 
 async def mark_unhealthy(provider: str, reason: str):

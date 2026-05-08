@@ -6,7 +6,28 @@ from celery import Task
 from app.workers.celery_app import celery_app
 
 
-# No helper needed, we use asyncio.run() directly for cleaner loop management.
+# ─── Loop Management Helper ──────────────────────────────────────────────────
+
+def run_async(coro):
+    """
+    Helper to run an async coroutine in a synchronous Celery task.
+    Ensures that every task gets its own event loop and properly 
+    disposes of global async resources (DB engine, Redis client) 
+    to avoid 'Event loop is closed' or 'Loop mismatch' errors.
+    """
+    async def _run_with_cleanup():
+        try:
+            return await coro
+        finally:
+            from app.database import dispose_engine
+            from app.utils.redis_client import close_redis_client
+            try:
+                await dispose_engine()
+                await close_redis_client()
+            except Exception as e:
+                print(f"[WARNING] Async cleanup failed: {e}")
+
+    return asyncio.run(_run_with_cleanup())
 
 
 # ─── Task 1: Sync a single source ────────────────────────────────────────────
@@ -87,7 +108,7 @@ def sync_source(self, source_id: str, user_id: str, job_id: str):
                 raise
 
     try:
-        return asyncio.run(_run())
+        return run_async(_run())
     except Exception as exc:
         raise self.retry(exc=exc)
 
@@ -132,7 +153,7 @@ def sync_all_sources_for_user(self, user_id: str):
                 print(f"[Pingo] Queued sync for {source.source_type} (job: {job_id})")
 
     try:
-        return asyncio.run(_run())
+        return run_async(_run())
     except Exception as exc:
         raise self.retry(exc=exc)
 
@@ -162,7 +183,7 @@ def auto_sync_all_users():
                 print(f"  -> Queued sync for user {user.email}")
 
     try:
-        return asyncio.run(_run())
+        return run_async(_run())
     except Exception as exc:
         # Standard tasks (Beat) don't necessarily need bind=True/retry, 
         # but we keep it consistent.
@@ -203,7 +224,7 @@ def generate_digest_for_user(self, user_id: str, fcm_token: str = None):
             return result
 
     try:
-        return asyncio.run(_run())
+        return run_async(_run())
     except Exception as exc:
         raise self.retry(exc=exc)
 
@@ -233,7 +254,7 @@ def generate_digests_for_all_users():
                 print(f"  -> Queued digest for {user.email}")
 
     try:
-        return asyncio.run(_run())
+        return run_async(_run())
     except Exception as exc:
         print(f"[ERROR] generate_digests_for_all_users failed: {exc}")
         raise
@@ -273,7 +294,7 @@ def refresh_topics_for_user(
             return result
 
     try:
-        return asyncio.run(_run())
+        return run_async(_run())
     except Exception as exc:
         raise self.retry(exc=exc)
 
@@ -340,6 +361,6 @@ def process_pdf_task(self, user_id: str, doc_id: str, file_path: str, job_id: st
                 raise
 
     try:
-        return asyncio.run(_run())
+        return run_async(_run())
     except Exception as exc:
         raise self.retry(exc=exc)

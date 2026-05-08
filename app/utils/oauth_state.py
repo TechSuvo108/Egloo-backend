@@ -12,15 +12,11 @@ CSRF.  They are single-use — verified states are deleted immediately.
 """
 
 import secrets
-import redis.asyncio as aioredis
+from app.utils.redis_client import get_redis_client
 
-from app.config import settings
-
-_redis_client = aioredis.from_url(
-    settings.REDIS_URL,
-    decode_responses=True,
-    encoding="utf-8",
-)
+def get_redis():
+    """Returns a loop-safe Redis client."""
+    return get_redis_client()
 
 _STATE_TTL_SECONDS = 600  # 10 minutes
 _KEY_PREFIX = "oauth_state:"
@@ -37,7 +33,7 @@ async def generate_state(user_id: str) -> str:
     returns the opaque state token to embed in the OAuth redirect URL.
     """
     state = secrets.token_urlsafe(32)
-    await _redis_client.setex(_state_key(state), _STATE_TTL_SECONDS, user_id)
+    await get_redis().setex(_state_key(state), _STATE_TTL_SECONDS, user_id)
     return state
 
 
@@ -49,7 +45,7 @@ async def verify_and_consume_state(state: str, user_id: str) -> bool:
         False – state is missing, expired, or belongs to a different user.
     """
     key = _state_key(state)
-    stored_user_id = await _redis_client.get(key)
+    stored_user_id = await get_redis().get(key)
 
     if stored_user_id is None:
         return False  # expired or never existed
@@ -58,5 +54,5 @@ async def verify_and_consume_state(state: str, user_id: str) -> bool:
         return False  # CSRF: state doesn't belong to this user
 
     # Single-use: delete immediately after verification
-    await _redis_client.delete(key)
+    await get_redis().delete(key)
     return True

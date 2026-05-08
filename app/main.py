@@ -6,7 +6,7 @@ from fastapi.responses import JSONResponse
 from app.routers import (
     auth, sources, ingest,
     query, llm, digest,
-    topics, saved,
+    topics, saved, brain,
 )
 
 
@@ -21,11 +21,13 @@ async def lifespan(app: FastAPI):
 
     # Check Redis
     try:
-        from app.services.auth_service import check_redis_connection
-        await check_redis_connection()
-        print("✅ Redis connected")
+        from app.utils.redis_client import check_redis_health
+        if await check_redis_health():
+            print("✅ Redis connected")
+        else:
+            print("⚠️  Redis not reachable (limited functionality)")
     except Exception as e:
-        print(f"❌ Redis connection failed: {e}")
+        print(f"❌ Redis check error: {e}")
 
     # Check ChromaDB
     try:
@@ -101,6 +103,7 @@ app.include_router(llm.router,     prefix="/api/v1")
 app.include_router(digest.router,  prefix="/api/v1")
 app.include_router(topics.router,  prefix="/api/v1")
 app.include_router(saved.router,   prefix="/api/v1")
+app.include_router(brain.router,   prefix="/api/v1/brain")
 
 
 # ── Root endpoints ────────────────────────────────────────────────────────────

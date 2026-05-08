@@ -41,6 +41,7 @@ async def ask(
     # Fetch active sources automatically
     user_sources = await source_service.get_all_sources(db, current_user.id)
     active_source_types = [s.source_type for s in user_sources]
+    print(f"[DEBUG] Active sources for query: {active_source_types}")
 
     try:
         result = await answer_question(

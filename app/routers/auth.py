@@ -16,8 +16,8 @@ from app.services.auth_service import (
     login_user,
     refresh_access_token,
     blacklist_access_token,
-    redis_client,
 )
+from app.utils.redis_client import get_redis_client
 from app.dependencies import get_current_user
 from app.models.user import User
 from app.config import settings
@@ -69,7 +69,7 @@ async def logout(
     token = credentials.credentials
     ttl = settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60
     await blacklist_access_token(token, ttl)
-    await redis_client.delete(f"refresh_token:{str(current_user.id)}")
+    await get_redis_client().delete(f"refresh_token:{str(current_user.id)}")
     return MessageResponse(message="Successfully logged out. Pingo is taking a nap. 🐧")
 
 

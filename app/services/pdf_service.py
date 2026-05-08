@@ -1,6 +1,7 @@
 import fitz  # PyMuPDF
 import uuid
 import os
+import hashlib
 from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,6 +14,17 @@ from app.utils.chunker import chunk_text
 from app.utils.embedder import embed_texts
 from app.utils.chroma_client import get_or_create_collection
 from app.services.source_service import upsert_source, get_source_by_type
+from app.services.alert_service import scan_and_store_alerts
+
+
+def get_file_hash(file_path: str) -> str:
+    """Compute SHA256 hash of a file."""
+    sha256_hash = hashlib.sha256()
+    with open(file_path, "rb") as f:
+        # Read in 4KB chunks
+        for byte_block in iter(lambda: f.read(4096), b""):
+            sha256_hash.update(byte_block)
+    return sha256_hash.hexdigest()
 
 
 async def extract_text_from_pdf(file_path: str) -> List[Dict[str, Any]]:
@@ -69,6 +81,39 @@ async def process_pdf_ingestion(
 
     try:
         doc_record.sync_status = "processing"
+        
+        # Compute file hash
+        file_hash = get_file_hash(file_path)
+        meta = dict(doc_record.file_metadata or {})
+        meta["hash"] = file_hash
+        doc_record.file_metadata = meta
+        
+        # Check for duplicates (same user, same hash, successful sync)
+        duplicate_query = (
+            select(UploadedDocument)
+            .where(UploadedDocument.user_id == user_uuid)
+            .where(UploadedDocument.file_metadata["hash"].astext == file_hash)
+            .where(UploadedDocument.sync_status == "success")
+            .where(UploadedDocument.id != doc_uuid) # Don't match current record
+            .limit(1)
+        )
+        duplicate_result = await db.execute(duplicate_query)
+        existing_doc = duplicate_result.scalar_one_or_none()
+        
+        if existing_doc:
+            print(f"[PDF] Duplicate detected for {doc_record.filename} (Hash: {file_hash[:8]}...). Skipping processing.")
+            
+            # Count existing chunks
+            from sqlalchemy import func
+            count_query = select(func.count()).where(DocumentChunk.chunk_metadata["document_id"].astext == str(existing_doc.id))
+            count_result = await db.execute(count_query)
+            existing_chunks_count = count_result.scalar() or 0
+            
+            doc_record.sync_status = "success"
+            doc_record.page_count = existing_doc.page_count
+            await db.commit()
+            return int(existing_chunks_count)
+
         await db.commit()
 
         # 1. Extract text
@@ -121,12 +166,16 @@ async def process_pdf_ingestion(
         collection = get_or_create_collection(user_id)
         chroma_ids = [str(uuid.uuid4()) for _ in all_chunks]
         
+        print(f"[DEBUG] Storing {len(all_chunks)} chunks in collection {collection.name}")
+        print(f"[DEBUG] Sample embedding length: {len(all_embeddings[0]) if all_embeddings else '0'}")
+        
         collection.add(
             ids=chroma_ids,
             documents=texts,
             embeddings=all_embeddings,
             metadatas=[c["metadata"] for c in all_chunks]
         )
+        print(f"[DEBUG] ChromaDB addition complete. Collection count now: {collection.count()}")
 
         # 6. Store in PostgreSQL (DocumentChunk)
         pg_chunks = [
@@ -144,6 +193,13 @@ async def process_pdf_ingestion(
         doc_record.sync_status = "success"
         await db.commit()
         print(f"[PDF] Successfully ingested {doc_record.filename} ({len(all_chunks)} chunks)")
+
+        # 7. Scan for proactive alerts
+        try:
+            await scan_and_store_alerts(user_id, all_chunks)
+        except Exception as e:
+            print(f"⚠️ [ALERT] Scanning failed for PDF: {e}")
+
         return len(all_chunks)
 
     except Exception as e:

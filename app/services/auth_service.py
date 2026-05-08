@@ -26,22 +26,13 @@ def verify_password(plain: str, hashed: str) -> bool:
     return pwd_context.verify(plain, hashed)
 
 
-# ---------------------------------------------------------------------------
-# Redis client (module-level singleton)
-# ---------------------------------------------------------------------------
-redis_client = aioredis.from_url(
-    settings.REDIS_URL,
-    decode_responses=True,
-    encoding="utf-8",
-)
+from app.utils.redis_client import get_redis_client
+
+def get_redis():
+    """Returns a loop-safe Redis client."""
+    return get_redis_client()
 
 
-async def check_redis_connection():
-    """Call this on startup to verify Redis is reachable."""
-    try:
-        await redis_client.ping()
-    except Exception as e:
-        raise RuntimeError(f"Redis connection failed: {e}")
 
 
 # ---------------------------------------------------------------------------
@@ -69,17 +60,17 @@ def create_refresh_token(user_id: UUID) -> str:
 async def save_refresh_token(user_id: UUID, refresh_token: str):
     key = f"refresh_token:{str(user_id)}"
     ttl = settings.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60
-    await redis_client.setex(key, ttl, refresh_token)
+    await get_redis().setex(key, ttl, refresh_token)
 
 
 async def blacklist_access_token(token: str, expires_in_seconds: int):
     key = f"blacklist:{token}"
-    await redis_client.setex(key, expires_in_seconds, "blacklisted")
+    await get_redis().setex(key, expires_in_seconds, "blacklisted")
 
 
 async def is_token_blacklisted(token: str) -> bool:
     key = f"blacklist:{token}"
-    result = await redis_client.get(key)
+    result = await get_redis().get(key)
     return result is not None
 
 
@@ -165,7 +156,7 @@ async def refresh_access_token(
     except JWTError:
         raise ValueError("Invalid or expired refresh token")
 
-    stored = await redis_client.get(f"refresh_token:{user_id}")
+    stored = await get_redis().get(f"refresh_token:{user_id}")
     if stored != refresh_token:
         raise ValueError("Refresh token has been rotated or invalidated")
 
