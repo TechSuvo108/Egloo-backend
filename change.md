@@ -9,6 +9,7 @@ I have implemented the full Google Drive connector, enabling Egloo to index and 
 - **`app/routers/sources.py`**: 
     - Added `GET /api/v1/sources/connect/google_drive` to initiate the OAuth flow.
     - Added `GET /api/v1/sources/callback/google_drive` to securely exchange the authorization code for tokens and store them as a new data source.
+    - **Fixed Success Redirects**: Updated both Gmail and Google Drive callbacks to return `RedirectResponse(url="egloo://...")` on success, ensuring the user is returned to the app instead of seeing raw JSON.
 
 ### 2. Ingestion Pipeline
 - **`app/services/fetchers/drive_fetcher.py`**: 

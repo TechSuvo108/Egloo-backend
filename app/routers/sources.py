@@ -272,11 +272,7 @@ async def gmail_callback(
         },
     )
 
-    return {
-        "success": True,
-        "message": "Gmail connected successfully",
-        "source": "gmail"
-    }
+    return RedirectResponse(url="egloo://auth/callback?status=success&source=gmail", status_code=302)
 
 
 @router.get(
@@ -339,11 +335,7 @@ async def google_drive_callback(
         },
     )
 
-    return {
-        "success": True,
-        "message": "Google Drive connected successfully",
-        "source": "google_drive"
-    }
+    return RedirectResponse(url="egloo://auth/callback?status=success&source=google_drive", status_code=302)
 
 
 @router.get(
