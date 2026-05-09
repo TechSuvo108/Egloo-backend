@@ -272,7 +272,7 @@ async def _fetch_documents(
             access_token=access_token,
             refresh_token=refresh_token,
             days_back=30,
-            max_files=50,
+            max_files=100,
         )
 
     else:

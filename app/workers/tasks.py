@@ -175,6 +175,55 @@ def sync_all_sources_for_user(self, user_id: str):
         raise self.retry(exc=exc)
 
 
+# ─── Task: Sync Google Drive specifically ────────────────────────────────────
+
+@celery_app.task(
+    bind=True,
+    name="app.workers.tasks.sync_google_drive",
+    max_retries=2,
+    default_retry_delay=60,
+)
+def sync_google_drive(self, user_id: str):
+    """
+    Celery task: sync Google Drive specifically for one user.
+    Finds the 'google_drive' source and queues a sync_source task.
+    """
+    async def _run():
+        from app.database import AsyncSessionLocal
+        from app.services.source_service import get_source_by_type
+        from app.utils.job_tracker import create_job
+        import uuid as _uuid
+
+        async with AsyncSessionLocal() as db:
+            source = await get_source_by_type(db, _uuid.UUID(user_id), "google_drive")
+            if not source:
+                print(f"[Pingo] No Google Drive connected for user {user_id}")
+                return
+
+            if source.sync_status == "syncing":
+                return
+
+            job_id = str(_uuid.uuid4())
+            await create_job(
+                job_id=job_id,
+                user_id=user_id,
+                source_id=str(source.id),
+                source_type="google_drive",
+            )
+
+            sync_source.delay(
+                source_id=str(source.id),
+                user_id=user_id,
+                job_id=job_id,
+            )
+            print(f"[Pingo] Queued Drive sync for user {user_id} (job: {job_id})")
+
+    try:
+        return run_async(_run())
+    except Exception as exc:
+        raise self.retry(exc=exc)
+
+
 # ─── Task 3: Auto-sync ALL users (Beat schedule every 15 min) ────────────────
 
 @celery_app.task(name="app.workers.tasks.auto_sync_all_users")

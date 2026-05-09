@@ -29,16 +29,18 @@ _SCOPES = [
 ]
 
 
-def build_google_auth_url(state: str) -> str:
+def build_google_auth_url(state: str, redirect_uri: Optional[str] = None) -> str:
     """Return the Google consent-screen URL to redirect the user to.
 
     Args:
         state: An opaque CSRF token previously stored in Redis via
                ``oauth_state.generate_state()``.
+        redirect_uri: Optional override for the redirect URI. 
+                      Defaults to settings.GOOGLE_REDIRECT_URI.
     """
     params = {
         "client_id": settings.GOOGLE_CLIENT_ID,
-        "redirect_uri": settings.GOOGLE_REDIRECT_URI,
+        "redirect_uri": redirect_uri or settings.GOOGLE_REDIRECT_URI,
         "response_type": "code",
         "scope": " ".join(_SCOPES),
         "access_type": "offline",   # request a refresh_token
@@ -48,7 +50,7 @@ def build_google_auth_url(state: str) -> str:
     return f"{_AUTH_URL}?{urlencode(params)}"
 
 
-async def exchange_google_code(code: str) -> dict:
+async def exchange_google_code(code: str, redirect_uri: Optional[str] = None) -> dict:
     """Exchange an authorization *code* for access + refresh tokens.
 
     Returns the raw token JSON from Google which includes at minimum:
@@ -63,7 +65,7 @@ async def exchange_google_code(code: str) -> dict:
         "code": code,
         "client_id": settings.GOOGLE_CLIENT_ID,
         "client_secret": settings.GOOGLE_CLIENT_SECRET,
-        "redirect_uri": settings.GOOGLE_REDIRECT_URI,
+        "redirect_uri": redirect_uri or settings.GOOGLE_REDIRECT_URI,
         "grant_type": "authorization_code",
     }
 

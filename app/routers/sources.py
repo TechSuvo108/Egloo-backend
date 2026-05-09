@@ -34,6 +34,7 @@ from app.schemas.source import (
 from typing import List
 from app.services import google_oauth, slack_oauth, source_service
 from app.utils.oauth_state import generate_state, verify_and_consume_state
+from app.config import settings
 
 router = APIRouter(tags=["sources"])
 
@@ -183,6 +184,22 @@ async def connect_slack(
     return RedirectResponse(url=url, status_code=status.HTTP_302_FOUND)
 
 
+@router.get(
+    "/sources/connect/google_drive",
+    summary="Initiate Google Drive OAuth flow",
+    response_class=RedirectResponse,
+)
+async def connect_google_drive(
+    current_user: User = Depends(get_current_user),
+):
+    """Generate a CSRF state token and redirect the user to Google's consent screen for Drive."""
+    state = await generate_state(str(current_user.id))
+    # Derive Drive redirect URI from the base Gmail one
+    drive_redirect = settings.GOOGLE_REDIRECT_URI.replace("/callback/gmail", "/callback/google_drive")
+    url = google_oauth.build_google_auth_url(state=state, redirect_uri=drive_redirect)
+    return RedirectResponse(url=url, status_code=status.HTTP_302_FOUND)
+
+
 # ---------------------------------------------------------------------------
 # Callbacks — handle OAuth redirect
 # ---------------------------------------------------------------------------
@@ -259,6 +276,73 @@ async def gmail_callback(
         "success": True,
         "message": "Gmail connected successfully",
         "source": "gmail"
+    }
+
+
+@router.get(
+    "/sources/callback/google_drive",
+    summary="Google Drive OAuth callback — store tokens and redirect",
+)
+async def google_drive_callback(
+    code: str = Query(..., description="Authorization code from Google"),
+    state: str = Query(..., description="CSRF state token"),
+    error: str | None = Query(None, description="Error code from Google, if any"),
+    db: AsyncSession = Depends(get_db),
+):
+    """Handle Google's redirect after the user grants Drive access."""
+    if error:
+        return RedirectResponse(url=f"egloo://auth/callback?status=error&message={urllib.parse.quote(error)}")
+
+    # Verify state ownership
+    from app.utils.redis_client import get_redis_client
+    _redis = get_redis_client()
+    stored_user_id = await _redis.get(f"oauth_state:{state}")
+
+    if stored_user_id is None:
+        error_msg = "Invalid or expired OAuth state. Please try connecting again."
+        return RedirectResponse(url=f"egloo://auth/callback?status=error&message={urllib.parse.quote(error_msg)}")
+
+    valid = await verify_and_consume_state(state, stored_user_id)
+    if not valid:
+        error_msg = "OAuth state mismatch. Possible CSRF attempt."
+        return RedirectResponse(url=f"egloo://auth/callback?status=error&message={urllib.parse.quote(error_msg)}")
+
+    try:
+        drive_redirect = settings.GOOGLE_REDIRECT_URI.replace("/callback/gmail", "/callback/google_drive")
+        token_data = await google_oauth.exchange_google_code(code, redirect_uri=drive_redirect)
+    except Exception as exc:
+        error_msg = f"Failed to exchange Google auth code for Drive: {exc}"
+        return RedirectResponse(url=f"egloo://auth/callback?status=error&message={urllib.parse.quote(error_msg)}")
+
+    from uuid import UUID
+
+    # Fetch user info for metadata
+    try:
+        user_info = await google_oauth.fetch_user_info(token_data["access_token"])
+        email = user_info.get("email", "")
+        name = user_info.get("name", "")
+    except Exception:
+        email = "Unknown"
+        name = "Google Drive Account"
+
+    await source_service.upsert_source(
+        db=db,
+        user_id=UUID(stored_user_id),
+        source_type="google_drive",
+        access_token=token_data["access_token"],
+        refresh_token=token_data.get("refresh_token"),
+        token_expiry=token_data.get("expires_at"),
+        source_metadata={
+            "scope": token_data.get("scope", ""),
+            "email": email,
+            "account_name": email or name,
+        },
+    )
+
+    return {
+        "success": True,
+        "message": "Google Drive connected successfully",
+        "source": "google_drive"
     }
 
 

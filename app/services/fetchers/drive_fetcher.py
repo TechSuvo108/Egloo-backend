@@ -25,20 +25,23 @@ def _extract_text_from_docx(content: bytes) -> str:
         doc = docx.Document(BytesIO(content))
         return "\n".join([para.text for para in doc.paragraphs if para.text.strip()])
     except Exception as e:
-        print(f"⚠️ Failed to extract docx text: {e}")
+        print(f"[Drive] Failed to extract docx text: {e}")
         return ""
 
 
 def _extract_text_from_pdf(content: bytes) -> str:
-    """Extract text from a PDF file bytes."""
+    """Extract text from a PDF file bytes using PyMuPDF."""
     try:
-        doc = fitz.open(stream=content, filetype="pdf")
-        text = ""
-        for page in doc:
-            text += page.get_text()
-        return text
+        with fitz.open(stream=content, filetype="pdf") as doc:
+            if doc.is_encrypted:
+                print("[Drive] PDF is encrypted, skipping.")
+                return ""
+            text = ""
+            for page in doc:
+                text += page.get_text()
+            return text
     except Exception as e:
-        print(f"⚠️ Failed to extract PDF text: {e}")
+        print(f"[Drive] Failed to extract PDF text: {e}")
         return ""
 
 
@@ -74,7 +77,8 @@ def fetch_drive_files(
         "  mimeType = 'application/vnd.google-apps.document' or "
         "  mimeType = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' or "
         "  mimeType = 'application/pdf' or "
-        "  mimeType = 'text/plain'"
+        "  mimeType = 'text/plain' or "
+        "  mimeType = 'text/markdown'"
         ")"
     )
 
@@ -82,7 +86,7 @@ def fetch_drive_files(
         service.files()
         .list(
             q=query,
-            pageSize=max_files,
+            pageSize=100,
             fields="files(id, name, mimeType, modifiedTime)",
         )
         .execute()
@@ -142,8 +146,8 @@ def fetch_drive_files(
             })
 
         except Exception as e:
-            print(f"⚠️ Failed to process Drive file {file_name}: {e}")
+            print(f"Failed to process Drive file {file_name}: {e}")
             continue
 
-    print(f"✅ Google Drive: fetched {len(parsed_files)} files")
+    print(f"Google Drive: fetched {len(parsed_files)} files")
     return parsed_files
